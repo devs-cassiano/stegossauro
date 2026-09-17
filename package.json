@@ -1,0 +1,20 @@
+{
+  "name": "stegossauro",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Stegossauro — Zero-Knowledge client-side steganography & EXIF purger",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build && node scripts/obfuscate-dist.mjs",
+    "build:plain": "tsc && vite build",
+    "preview": "vite preview",
+    "test:smoke": "npx --yes tsx scripts/smoke-roundtrip.ts"
+  },
+  "devDependencies": {
+    "javascript-obfuscator": "^4.1.1",
+    "terser": "^5.37.0",
+    "typescript": "^5.7.3",
+    "vite": "^6.0.7"
+  }
+}

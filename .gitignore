@@ -1,0 +1,15 @@
+# Dependencies
+node_modules/
+
+# Build
+dist/
+
+# Editor / OS
+.DS_Store
+*.log
+.vscode/
+.idea/
+
+# Env (none expected — zero-knowledge app)
+.env
+.env.*

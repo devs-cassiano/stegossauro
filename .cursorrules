@@ -1,0 +1,176 @@
+# Diretivas do Cursor: StegoShield Engine (Zero-Knowledge Universal Steganography & Metadata Purger)
+
+Este documento define as regras absolutas de arquitetura, isolamento, manipulação agnóstica de arquivos binários, criptografia e esteganografia para o Cursor IDE implementar o sistema.
+
+## 1. Perfil e Postura do Agente
+
+* Atue como um Engenheiro Especialista em Criptografia Aplicada, Processamento de Mídia e Segurança Ofensiva/Defensiva.
+* Priorize código defensivo, segurança de memória (zero crash / zero memory leak), ausência absoluta de telemetria, validação matemática de integridade e dissimulação forense de nomenclaturas.
+* Trate **qualquer arquivo de entrada como um fluxo arbitrário de bytes (raw binary stream)**. Nunca imponha restrições por extensão ou tipo MIME.
+
+---
+
+## 2. Diretivas Invioláveis de Privacidade e Isolamento (Zero-Knowledge)
+
+* **Zero Tráfego de Rede (Rede Bloqueada):**
+  * Proibição categórica de `fetch`, `XMLHttpRequest`, `WebSocket`, `navigator.sendBeacon`, `EventSource` e injeção dinâmica de scripts.
+  * Zero dependências de CDNs externas. Tudo deve ser embutido e local.
+  * Aplicação estrita de Content Security Policy (CSP):
+    ```html
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline'; connect-src 'none'; img-src 'self' blob: data:; object-src 'none'; form-action 'none';">
+    ```
+
+* **Zero Persistência em Disco Hospedeiro:**
+  * Proibido salvar chaves, payloads intermediários ou arquivos descriptografados em `localStorage`, `sessionStorage`, `IndexedDB` ou cookies.
+  * Todo o processamento deve ocorrer estritamente na memória volátil (RAM) ou buffers do Web Worker.
+  * Revogue Object URLs (`URL.revokeObjectURL()`) imediatamente após o download ou descarte da visualização.
+
+* **Funcionamento Offline:**
+  * A aplicação deve ser capaz de rodar 100% desconectada da internet (modo air-gapped).
+
+---
+
+## 3. Filosofia de Arquivo Agnóstico (Universal File Support)
+
+* **Compatibilidade Irrestrita com Qualquer Extensão:**
+  * O campo de seleção do arquivo secreto deve aceitar **qualquer extensão imaginável** sem restrição (`<input type="file" id="secretFileInput">` sem atributo `accept`).
+  * Exemplos de arquivos suportados sem distinção:
+    * Vídeos e áudios: `.mp4`, `.mkv`, `.avi`, `.mov`, `.webm`, `.mp3`, `.wav`, `.flac`.
+    * Documentos e planilhas: `.pdf`, `.docx`, `.xlsx`, `.pptx`, `.odt`, `.txt`, `.csv`.
+    * Pacotes e contêineres: `.zip`, `.rar`, `.7z`, `.tar`, `.gz`, `.iso`, `.dmg`.
+    * Executáveis e bibliotecas: `.exe`, `.bin`, `.app`, `.dll`, `.so`.
+    * Códigos e bancos de dados: `.py`, `.js`, `.c`, `.rs`, `.sqlite`, `.db`, `.sql`.
+    * Chaves criptográficas, certificados e backups: `.pem`, `.key`, `.kdbx`, `.dat`.
+    * Arquivos sem extensão ou com extensões proprietárias raras.
+
+* **Preservação Agnóstica do Binário:**
+  * O arquivo deve ser lido unicamente como um `Uint8Array` de bytes brutos (`await file.arrayBuffer()`).
+  * O nome completo original com a respectiva extensão (ex.: `relatorio_final.pdf`, `camera_01.mkv`, `backup.tar.gz`, `seed.dat`) e a string MIME (mesmo que seja `application/octet-stream`) devem ser serializados dentro do cabeçalho JSON embutido na carga secreta.
+  * Na extração, o Blob é recriado preservando fielmente os bytes originais e disparando o download com o nome e extensão originais exatos.
+
+* **Compressão Seletiva Inteligente em Memória:**
+  * Antes da injeção, tente comprimir o array de bytes via `CompressionStream('deflate-raw')`.
+  * **Heurística de Ganho:**
+    * Se o tamanho comprimido for $\ge 98\%$ do original (comum em vídeos, arquivos já zipados ou fotos), descarte a compressão e use os bytes brutos (defina a flag `isCompressed = 0`).
+    * Se houver redução real (comum em PDFs, bancos de dados, planilhas, códigos), utilize a versão comprimida (defina a flag `isCompressed = 1`).
+  * Na extração, verifique a flag `isCompressed` e aplique `DecompressionStream('deflate-raw')` de forma transparente se necessário.
+
+---
+
+## 4. Ocultação em Imagem com Densidade LSB Dinâmica (1 a 3 bits)
+
+* **O Disfarce é Sempre uma Imagem:**
+  * Independentemente da extensão do arquivo secreto (seja um `.mp4` de 20 MB ou um `.kdbx` de 50 KB), o arquivo de saída gerado é **SEMPRE uma imagem `.png`** perfeitamente visualizável em qualquer sistema operacional.
+
+* **Densidade de Injeção Configurável e Automática (1 a 3 bits por canal):**
+  * **1-LSB:** 1 bit por canal R, G, B $\rightarrow$ 3 bits/pixel (máxima discrição visual; alteração de $\approx 0,39\%$ no tom de cor).
+  * **2-LSB:** 2 bits por canal R, G, B $\rightarrow$ 6 bits/pixel (capacidade dobrada: $\approx 750\text{ KB}$ por megapixel).
+  * **3-LSB:** 3 bits por canal R, G, B $\rightarrow$ 9 bits/pixel (alta capacidade: $\approx 1.12\text{ MB}$ por megapixel; uma imagem de 40 MP comporta mais de 45 MB).
+
+* **Seleção Automática de Densidade:**
+  * Ao carregar o Arquivo Secreto e a Imagem de Disfarce, o sistema calcula a densidade mínima necessária (1, 2 ou 3) para abrigar o arquivo com o menor impacto estético possível.
+  * A densidade utilizada ($1, 2 \text{ ou } 3$) é codificada diretamente no cabeçalho interno sob a rota da chave.
+
+* **Validação Prévia de Capacidade:**
+  * Caso o arquivo secreto exceda a capacidade máxima da imagem mesmo em 3-LSB, a operação é bloqueada antes do processamento com uma mensagem orientativa clara:
+    *"Capacidade insuficiente: o arquivo selecionado requer X MB, mas o disfarce comporta até Y MB em 3-LSB. Escolha uma imagem de maior resolução (ex.: foto de 48MP, wallpaper 4K/8K ou panorama)."*
+
+---
+
+## 5. Gerenciamento de Memória & Web Worker (Zero UI Freezing)
+
+* **Worker Dedicado (`stego-worker.ts`):**
+  * O processamento de imagens de alta resolução (20 MP a 100 MP) e arquivos pesados (vídeos/PDFs/ZIPs) DEVE rodar em um Web Worker para manter a interface fluida a 60 FPS.
+
+* **Transferência sem Cópia (Transferable Objects):**
+  * Ao transferir `ImageData` ou `ArrayBuffer` entre a thread principal e o Worker, utilize Transferable Objects:
+    ```typescript
+    worker.postMessage({ buffer, density, seed }, [buffer]);
+    ```
+  * Nunca clone estruturas de dados volumosas por valor.
+
+* **Liberação de Memória:**
+  * Imediatamente após a injeção, libere referências de arquivos brutos e anule ponteiros para acionar a coleta de lixo.
+
+* **Barra de Progresso Granular:**
+  * O Worker deve emitir mensagens de progresso periódicas para a UI: `sanitizing`, `compressing`, `mapping_indices`, `injecting_bits` (0% a 100%).
+
+---
+
+## 6. Política Rígida de Nomenclatura e Anonimização Forense
+
+* **Proibição Absoluta de Termos Reveladores:**
+  * É proibido que o software gere automaticamente arquivos contendo termos como `stego`, `secret`, `hidden`, `vault`, `payload`, `carrier` ou `crypto`.
+
+* **Campo de Nomenclatura Customizada na Interface:**
+  * A interface deve conter um campo explícito para o usuário definir o nome final do arquivo de disfarce gerado (ex.: `IMG_20260917_142311`, `Wallpaper_Nature_4K`, `Documento_Digitalizado`).
+  * Sugestão padrão neutra: se o usuário deixar em branco ou clicar em sortear, sugira nomes inofensivos realistas (estilo câmera digital `IMG_[TIMESTAMP]` ou capturas de tela).
+  * A extensão final do arquivo de disfarce deve ser sempre forçada para `.png` (para manter o formato sem perdas que preserva o LSB), mas o nome base é 100% customizável.
+
+* **Arquivo de Chave (.key):**
+  * O nome sugerido para exportação do arquivo de chave também não deve conter a palavra `secret` ou `stego` (deve herdar o nome base ou identificador neutro, como `[nome_escolhido]_backup.key`).
+
+---
+
+## 7. Especificação Criptográfica e Esteganográfica
+
+### 7.1. Geração de Chave Única por Arquivo
+* Entropia gerada via `crypto.getRandomValues(new Uint8Array(32))` (256 bits).
+* Formatação em blocos legíveis (ex.: Base58 com checksum ou hexadecimal separado por hífens em quartetos: `a1b2-c3d4-e5f6-...`).
+* **Ciclo de vida:** A seleção de qualquer novo arquivo secreto deve invalidar a chave anterior e disparar automaticamente a geração de uma nova chave única.
+* Oferecer opções de interface: copiar chave, regenerar e salvar em arquivo `.key` de texto simples.
+
+### 7.2. Dispersão Pseudoaleatória Guiada por Chave (Anti-Steganálise)
+* **Nunca utilize LSB sequencial/linear:** Gravação linear é vulnerável a análises de qui-quadrado e histogramas de pares de valores (PoV).
+* **Derivação de Semente:**
+  * A chave passa por SHA-256 (`crypto.subtle.digest('SHA-256', keyBytes)`) para produzir a semente uniforme do PRNG.
+* **Motor PRNG:**
+  * Implemente um gerador pseudoaleatório determinístico uniforme de 32 bits (ex.: ChaCha20-DRBG ou Mulberry32/PCG32).
+* **Mapeamento de Coordenadas:**
+  * Seleção de canais de pixels via permutação sem colisão (Fisher-Yates parcial ou amostragem indexada).
+  * Alocar bits apenas nos canais de cor **Vermelho (R), Verde (G) e Azul (B)**.
+  * **Regra do Canal Alpha:** O canal Alpha (A) **nunca** deve ser alterado (manter fixo em 255) para prevenir artefatos visuais de transparência ou alterações no Canvas.
+
+### 7.3. Layout Binário do Container Oculto (Fluxo de Bits LSB)
+
+| Ordem | Campo | Tamanho | Descrição |
+| :--- | :--- | :--- | :--- |
+| 1 | `Auth Checksum` | 4 Bytes | Primeiros 4 bytes do HMAC-SHA256 da chave para validação instantânea sem falsos positivos. |
+| 2 | `Config Flags` | 1 Byte | Bit 0: `isCompressed` (0=raw, 1=deflate) \| Bits 1-2: `density` (1, 2 ou 3 LSB). |
+| 3 | `Meta Length` | 2 Bytes (Big-Endian) | Tamanho do cabeçalho JSON de metadados. |
+| 4 | `Metadata JSON` | $N$ Bytes | JSON serializado contendo `{ "name": "arquivo.ext", "mimeType": "..." }`. |
+| 5 | `Payload Length` | 4 Bytes (Big-Endian) | Tamanho exato em bytes do arquivo secreto (comprimido ou bruto). |
+| 6 | `Payload Raw` | $M$ Bytes | Bytes brutos do arquivo secreto a ser restaurado. |
+
+---
+
+## 8. Sanitização e Expurgador de Metadados (EXIF Stripper)
+
+* **Arquivo de Disfarce (Imagem Hospedeira):**
+  * Imagens de entrada (JPG, PNG, WEBP) devem ser desenhadas em um `OffscreenCanvas` ou `<canvas>` limpo em memória 1:1.
+  * A extração dos pixels brutos via `getImageData()` expurga nativamente todas as marcações EXIF, registros de GPS, XMP, IPTC, dados de fabricante e perfis ICC.
+  * A imagem resultante deve ser exportada exclusivamente em **PNG sem perdas** (`image/png`).
+
+* **Arquivo Secreto:**
+  * Descarte timestamps de criação/modificação do sistema operacional hospedeiro e caminhos locais de arquivo. Apenas o nome base e a extensão originais são preservados dentro do container interno.
+
+---
+
+## 9. Requisitos de Interface (UI/UX)
+
+* **Estilo Visual:** Dark theme minimalista (tons escuros `#090d16`, bordas sutis, tipografia monoespaçada limpa, destaques em azul/ciano e verde para sucesso).
+* **Aba 1 (Ocultar no Disfarce):**
+  1. **Campo 1:** Seleção do Arquivo Secreto (aceita **qualquer extensão**, exibe tamanho formatado em KB/MB/GB e ícone/tipo genérico detectado).
+  2. **Campo 2:** Seleção do Arquivo de Disfarce (exibe dimensões em megapixels e capacidade útil calculada em 1-LSB, 2-LSB e 3-LSB).
+  3. **Campo 3:** Nome do Novo Arquivo Combinado (input de texto editável com sugestão neutra `IMG_[TIMESTAMP]` e botão de sortear nome alternativo inofensivo).
+  4. **Campo 4:** Barra de Chave Única (com indicador de entropia, botões de Nova Chave, Copiar e Baixar `.key`).
+  5. **Indicador de Densidade & Compressão:** Badge visual informativo (ex.: *"Densidade: 2-LSB selecionada automaticamente | Compressão: Ativa (-38%)"*).
+  6. **Ação:** Botão de processamento com barra de progresso em tempo real alimentada pelo Worker.
+  7. **Download:** Botão de download exibindo exatamente o nome definido no Campo 3 com extensão `.png`.
+
+* **Aba 2 (Recuperar Arquivo Secreto):**
+  1. **Campo 1:** Seleção do arquivo de imagem combinado.
+  2. **Campo 2:** Entrada da chave única.
+  3. **Ação:** Botão de extração e link de download com o nome e extensão originais restaurados (seja um `.mp4`, `.kdbx`, `.pdf`, `.zip`, etc.).
+
+* **Console de Auditoria Local:** Área visual de log exibindo cada passo em tempo real de forma técnica e neutra (ex.: *"Arquivo secreto carregado: documento.pdf (18.4 MB)"*, *"Disfarce sanitizado: 3840x2160 (8.29 MP)"*, *"Bits injetados em modo 2-LSB"*).
