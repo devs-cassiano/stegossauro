@@ -7,7 +7,7 @@ const { generateKeyBytes, formatKeyHex, parseKeyHex } = await import(
 );
 const { embed, extract } = await import('../src/stego/engine.ts');
 const { selectDensity, capacityBytesAt, containerByteLength } = await import(
-  '../src/stego/canvas.ts'
+  '../src/stego/capacity.ts'
 );
 
 function makePixels(width: number, height: number): Uint8ClampedArray {

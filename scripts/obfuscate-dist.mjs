@@ -1,6 +1,6 @@
 /**
- * Post-build obfuscation for production dist chunks (main + worker).
- * Invoked by: npm run build
+ * Post-build obfuscation for production main bundle only.
+ * Workers are excluded — obfuscators often inject `window`, which breaks Worker scope.
  */
 import { readdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -31,15 +31,23 @@ const options = {
   ignoreImports: true,
 };
 
+function isWorkerChunk(file) {
+  return /worker/i.test(file);
+}
+
 async function main() {
   const files = await readdir(assetsDir);
-  const jsFiles = files.filter((f) => f.endsWith('.js'));
+  const jsFiles = files.filter((f) => f.endsWith('.js') && !isWorkerChunk(f));
   for (const file of jsFiles) {
     const full = path.join(assetsDir, file);
     const src = await readFile(full, 'utf8');
     const result = JavaScriptObfuscator.obfuscate(src, options);
     await writeFile(full, result.getObfuscatedCode(), 'utf8');
     console.log('obfuscated', file);
+  }
+  const skipped = files.filter((f) => f.endsWith('.js') && isWorkerChunk(f));
+  for (const file of skipped) {
+    console.log('skipped worker', file);
   }
 }
 

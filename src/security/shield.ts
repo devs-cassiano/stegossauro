@@ -2,6 +2,12 @@ type PanicFn = () => void;
 
 const PROD = import.meta.env.PROD;
 
+/** Main-thread global (never import this module into a Worker). */
+const g = globalThis as typeof globalThis & {
+  setTimeout: typeof setTimeout;
+  addEventListener: typeof addEventListener;
+};
+
 function randDelay(): number {
   return 800 + Math.floor(Math.random() * 1400);
 }
@@ -18,34 +24,35 @@ function armDebuggerLoop(): void {
     } catch {
       /* ignore */
     }
-    window.setTimeout(tick, randDelay());
+    g.setTimeout(tick, randDelay());
   };
-  window.setTimeout(tick, randDelay());
+  g.setTimeout(tick, randDelay());
 }
 
 function armShortcutShield(): void {
-  window.addEventListener(
+  g.addEventListener(
     'keydown',
-    (e) => {
-      const key = e.key?.toLowerCase?.() ?? '';
-      const ctrl = e.ctrlKey || e.metaKey;
-      const shift = e.shiftKey;
+    (e: Event) => {
+      const ke = e as KeyboardEvent;
+      const key = ke.key?.toLowerCase?.() ?? '';
+      const ctrl = ke.ctrlKey || ke.metaKey;
+      const shift = ke.shiftKey;
       const block =
-        e.key === 'F12' ||
+        ke.key === 'F12' ||
         (ctrl && shift && (key === 'i' || key === 'j' || key === 'c')) ||
         (ctrl && key === 'u') ||
-        (e.metaKey && e.altKey && (key === 'i' || key === 'j'));
+        (ke.metaKey && ke.altKey && (key === 'i' || key === 'j'));
       if (block) {
-        e.preventDefault();
-        e.stopPropagation();
+        ke.preventDefault();
+        ke.stopPropagation();
       }
     },
     true,
   );
 
-  window.addEventListener(
+  g.addEventListener(
     'contextmenu',
-    (e) => {
+    (e: Event) => {
       e.preventDefault();
     },
     true,
@@ -63,13 +70,14 @@ function armTimingWatch(onPanic: PanicFn): void {
     if (delta > THRESHOLD_MS * 8) {
       onPanic();
     }
-    window.setTimeout(pulse, THRESHOLD_MS + Math.floor(Math.random() * 120));
+    g.setTimeout(pulse, THRESHOLD_MS + Math.floor(Math.random() * 120));
   };
-  window.setTimeout(pulse, THRESHOLD_MS);
+  g.setTimeout(pulse, THRESHOLD_MS);
 }
 
 export function armClientShield(onPanic: PanicFn): void {
   if (!PROD) return;
+  if (typeof document === 'undefined') return;
   armShortcutShield();
   armDebuggerLoop();
   armTimingWatch(onPanic);

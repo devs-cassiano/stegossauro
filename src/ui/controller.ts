@@ -8,11 +8,10 @@ import {
   capacityExceededMessage,
   computeCapacity,
   containerByteLength,
-  exportPngBlob,
   preserveFileName,
-  purgeCoverImage,
   selectDensity,
-} from '../stego/canvas';
+} from '../stego/capacity';
+import { exportPngBlob, purgeCoverImage } from '../stego/canvas';
 import type { AuditEntry, AuditLevel, CoverImageInfo } from '../types';
 import { zeroize } from '../security/zeroize';
 import {
@@ -896,7 +895,7 @@ export class UiController {
     document.body.appendChild(a);
     a.click();
     a.remove();
-    window.setTimeout(() => {
+    globalThis.setTimeout(() => {
       try {
         URL.revokeObjectURL(url);
       } catch {

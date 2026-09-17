@@ -21,7 +21,7 @@ import {
   encodeFlags,
   selectDensity,
   slotsNeededForBytes,
-} from './canvas';
+} from './capacity';
 import { maybeCompress, maybeDecompress } from './compress';
 
 export type ProgressFn = (percent: number, message: string) => void;

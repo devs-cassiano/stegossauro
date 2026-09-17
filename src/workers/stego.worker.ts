@@ -1,15 +1,19 @@
 /// <reference lib="webworker" />
 
+/**
+ * Dedicated worker — binary / PRNG / LSB only.
+ * No DOM, no window, no anti-debug.
+ */
 import { embed, extract } from '../stego/engine';
 import type { WorkerRequest, WorkerResponse } from '../types';
 
-const ctx: DedicatedWorkerGlobalScope = self as unknown as DedicatedWorkerGlobalScope;
+declare const self: DedicatedWorkerGlobalScope;
 
 function reply(msg: WorkerResponse, transfer: Transferable[] = []): void {
-  ctx.postMessage(msg, transfer);
+  self.postMessage(msg, transfer);
 }
 
-ctx.onmessage = async (ev: MessageEvent<WorkerRequest>) => {
+self.onmessage = async (ev: MessageEvent<WorkerRequest>) => {
   const msg = ev.data;
   try {
     if (msg.type === 'embed') {
@@ -34,7 +38,11 @@ ctx.onmessage = async (ev: MessageEvent<WorkerRequest>) => {
       return;
     }
 
-    reply({ id: (msg as WorkerRequest).id, type: 'error', message: 'Tipo de tarefa desconhecido' });
+    reply({
+      id: (msg as WorkerRequest).id,
+      type: 'error',
+      message: 'Tipo de tarefa desconhecido',
+    });
   } catch (err) {
     const message =
       err instanceof Error ? err.message : 'Falha no processamento esteganográfico';

@@ -7,6 +7,7 @@ function looksNative(fn: (...args: never[]) => unknown): boolean {
   }
 }
 
+/** Main-thread only — do not import from Worker. */
 export function assertRuntimeIntegrity(): boolean {
   try {
     if (typeof crypto === 'undefined' || !crypto.getRandomValues || !crypto.subtle) {
@@ -19,9 +20,14 @@ export function assertRuntimeIntegrity(): boolean {
       return false;
     }
 
-    const draw = CanvasRenderingContext2D?.prototype?.drawImage;
-    if (draw && !looksNative(draw as (...args: never[]) => unknown)) {
-      return false;
+    if (typeof document !== 'undefined') {
+      const draw =
+        typeof CanvasRenderingContext2D !== 'undefined'
+          ? CanvasRenderingContext2D.prototype?.drawImage
+          : undefined;
+      if (draw && !looksNative(draw as (...args: never[]) => unknown)) {
+        return false;
+      }
     }
 
     return true;
