@@ -1,15 +1,13 @@
 /**
  * Deterministic 32-bit PRNG (PCG-XSH-RR) seeded from SHA-256 key material.
- * Used exclusively for collision-free LSB channel permutation — never for key generation.
+ * Collision-free LSB channel permutation only — never for key generation.
  */
 
 export interface Prng32 {
   nextUint32(): number;
-  /** Uniform integer in [0, bound). */
   nextBounded(bound: number): number;
 }
 
-/** PCG32 with 64-bit state (BigInt), initialized from ≥16 seed bytes. */
 export function createPcg32(seedBytes: Uint8Array): Prng32 {
   if (seedBytes.length < 16) {
     throw new Error('Semente PRNG insuficiente (mín. 16 bytes)');
@@ -39,8 +37,8 @@ export function createPcg32(seedBytes: Uint8Array): Prng32 {
     if ((bound & (bound - 1)) === 0) {
       return nextUint32() & (bound - 1);
     }
-    const limit = 0x100000000 - (0x100000000 % bound);
-    let r: number;
+    const limit = (0x100000000 - (0x100000000 % bound)) >>> 0;
+    let r = 0;
     do {
       r = nextUint32();
     } while (r >= limit);
@@ -61,8 +59,8 @@ function readU32(buf: Uint8Array, offset: number): number {
 }
 
 /**
- * Partial Fisher-Yates: `count` unique indices in [0, universe)
- * via sparse swap table (avoids O(universe) allocation).
+ * Partial Fisher-Yates: `count` unique indices in [0, universe).
+ * Uses dense array when selection is large (avoids Map OOM on 4K/8K covers).
  */
 export function uniqueIndices(prng: Prng32, universe: number, count: number): Uint32Array {
   if (count > universe) {
@@ -71,6 +69,20 @@ export function uniqueIndices(prng: Prng32, universe: number, count: number): Ui
     );
   }
   if (count <= 0) return new Uint32Array(0);
+
+  const useDense = count > 250_000 || count * 2 > universe;
+
+  if (useDense) {
+    const arr = new Uint32Array(universe);
+    for (let i = 0; i < universe; i++) arr[i] = i >>> 0;
+    for (let i = 0; i < count; i++) {
+      const j = i + prng.nextBounded(universe - i);
+      const tmp = arr[i]!;
+      arr[i] = arr[j]!;
+      arr[j] = tmp;
+    }
+    return arr.slice(0, count);
+  }
 
   const map = new Map<number, number>();
   const result = new Uint32Array(count);
@@ -81,18 +93,15 @@ export function uniqueIndices(prng: Prng32, universe: number, count: number): Ui
     const atI = map.has(i) ? map.get(i)! : i;
     map.set(j, atI);
     map.set(i, atJ);
-    result[i] = atJ;
+    result[i] = atJ >>> 0;
   }
 
   return result;
 }
 
-/**
- * Map linear RGB-slot index → ImageData byte offset (RGBA).
- * Slot s → pixel ⌊s/3⌋, channel s%3 ∈ {R,G,B}; Alpha never selected.
- */
+/** Slot s → ImageData byte offset (RGBA). Alpha never selected. */
 export function slotToByteOffset(slot: number): number {
   const pixel = (slot / 3) | 0;
   const channel = slot % 3;
-  return pixel * 4 + channel;
+  return (pixel * 4 + channel) >>> 0;
 }

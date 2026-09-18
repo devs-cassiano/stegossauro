@@ -131,4 +131,12 @@ async function roundTrip(
   await roundTrip('density2+', width, height, secret, 'big.bin', 'application/octet-stream');
 }
 
+// Capacity math: Full HD 3-LSB = 1920×1080×3×3/8 = 2_332_800 B ≈ 2.33 MB
+{
+  const fhd = capacityBytesAt(1920, 1080, 3);
+  if (fhd !== 2_332_800) {
+    throw new Error(`FHD 3-LSB capacity expected 2332800, got ${fhd}`);
+  }
+}
+
 console.log('All smoke tests passed');

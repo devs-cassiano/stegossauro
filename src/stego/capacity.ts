@@ -12,7 +12,13 @@ import {
 
 /** Worker-safe: no DOM / window. */
 
+/**
+ * Theoretical LSB capacity in bits.
+ * 3-LSB: width × height × 3 RGB channels × 3 bits/channel
+ * (Full HD 1920×1080 → 23_328_000 bits → 2_332_800 B ≈ 2.33 MB)
+ */
 export function capacityBitsAt(width: number, height: number, density: LsbDensity): number {
+  if (width < 1 || height < 1) return 0;
   return width * height * CHANNELS_PER_PIXEL * density;
 }
 
@@ -75,19 +81,54 @@ export function slotsNeededForBytes(byteCount: number, density: LsbDensity): num
   return Math.ceil((byteCount * 8) / density);
 }
 
-export function capacityExceededMessage(neededBytes: number, maxBytes3: number): string {
-  return (
-    `Capacidade insuficiente: o arquivo selecionado requer ${formatBytes(neededBytes)}, ` +
-    `mas o disfarce comporta até ${formatBytes(maxBytes3)} em 3-LSB. ` +
-    `Escolha uma imagem de maior resolução (ex.: foto de 48MP, wallpaper 4K/8K ou panorama).`
-  );
+/** Human size for capacity UX (SI units so FHD 3-LSB ≈ 2.33 MB). */
+export function formatCapacitySize(bytes: number): string {
+  const mb = bytes / 1_000_000;
+  if (mb >= 0.01) return `${mb.toFixed(2)} MB`;
+  const kb = bytes / 1_000;
+  if (kb >= 0.01) return `${kb.toFixed(2)} KB`;
+  return `${Math.max(0, Math.floor(bytes))} B`;
 }
 
-function formatBytes(n: number): string {
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(2)} KB`;
-  if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(2)} MB`;
-  return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+/**
+ * Minimum WxH (preserving aspect) whose 3-LSB capacity holds `neededContainerBytes`.
+ */
+export function suggestMinResolution(
+  neededContainerBytes: number,
+  aspectW: number,
+  aspectH: number,
+): { width: number; height: number } {
+  const aw = aspectW > 0 ? aspectW : 16;
+  const ah = aspectH > 0 ? aspectH : 9;
+  const minPixels = Math.ceil((neededContainerBytes * 8) / (CHANNELS_PER_PIXEL * 3));
+  const aspect = aw / ah;
+  let height = Math.max(1, Math.ceil(Math.sqrt(minPixels / aspect)));
+  let width = Math.max(1, Math.ceil(height * aspect));
+
+  // Round up until 3-LSB capacity is strictly enough (ceil/floor edge cases).
+  let guard = 0;
+  while (capacityBytesAt(width, height, 3) < neededContainerBytes && guard < 1_000_000) {
+    height += 1;
+    width = Math.max(1, Math.ceil(height * aspect));
+    guard += 1;
+  }
+  return { width, height };
+}
+
+export function capacityExceededMessage(
+  neededBytes: number,
+  maxBytes3: number,
+  coverWidth = 0,
+  coverHeight = 0,
+): string {
+  const aspectW = coverWidth > 0 ? coverWidth : 16;
+  const aspectH = coverHeight > 0 ? coverHeight : 9;
+  const { width, height } = suggestMinResolution(neededBytes, aspectW, aspectH);
+  return (
+    `Capacidade insuficiente em 3-LSB: Imagem suporta até ${formatCapacitySize(maxBytes3)} ` +
+    `| Arquivo requer ${formatCapacitySize(neededBytes)}. ` +
+    `Use uma imagem com resolução mínima sugerida de ${width} x ${height} px.`
+  );
 }
 
 export function preserveFileName(name: string): string {

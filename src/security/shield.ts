@@ -2,14 +2,24 @@ type PanicFn = () => void;
 
 const PROD = import.meta.env.PROD;
 
-/** Main-thread global (never import this module into a Worker). */
 const g = globalThis as typeof globalThis & {
   setTimeout: typeof setTimeout;
   addEventListener: typeof addEventListener;
 };
 
+let heavyOps = 0;
+
+/** Pause anti-debug timing while main thread may block (decode / I/O). */
+export function beginHeavyWork(): void {
+  heavyOps += 1;
+}
+
+export function endHeavyWork(): void {
+  heavyOps = Math.max(0, heavyOps - 1);
+}
+
 function randDelay(): number {
-  return 800 + Math.floor(Math.random() * 1400);
+  return 1200 + Math.floor(Math.random() * 1800);
 }
 
 function trapDebugger(): void {
@@ -19,10 +29,12 @@ function trapDebugger(): void {
 
 function armDebuggerLoop(): void {
   const tick = (): void => {
-    try {
-      trapDebugger();
-    } catch {
-      /* ignore */
+    if (heavyOps === 0) {
+      try {
+        trapDebugger();
+      } catch {
+        /* ignore */
+      }
     }
     g.setTimeout(tick, randDelay());
   };
@@ -59,20 +71,24 @@ function armShortcutShield(): void {
   );
 }
 
-function armTimingWatch(onPanic: PanicFn): void {
+/**
+ * Timing anomalies must NEVER remount the UI.
+ * Large image decode / LSB mapping legitimately blocks the main thread for seconds.
+ */
+function armTimingWatch(_onAnomaly: PanicFn): void {
   let last = performance.now();
-  const THRESHOLD_MS = 280;
+  const IDLE_MS = 400;
 
   const pulse = (): void => {
     const now = performance.now();
     const delta = now - last;
     last = now;
-    if (delta > THRESHOLD_MS * 8) {
-      onPanic();
-    }
-    g.setTimeout(pulse, THRESHOLD_MS + Math.floor(Math.random() * 120));
+    // Intentionally no panicWipe / location.reload — stalls are expected under load.
+    void delta;
+    void _onAnomaly;
+    g.setTimeout(pulse, IDLE_MS + Math.floor(Math.random() * 200));
   };
-  g.setTimeout(pulse, THRESHOLD_MS);
+  g.setTimeout(pulse, IDLE_MS);
 }
 
 export function armClientShield(onPanic: PanicFn): void {
@@ -80,5 +96,6 @@ export function armClientShield(onPanic: PanicFn): void {
   if (typeof document === 'undefined') return;
   armShortcutShield();
   armDebuggerLoop();
+  // Keep callback for API compat but timing watch does not remount.
   armTimingWatch(onPanic);
 }

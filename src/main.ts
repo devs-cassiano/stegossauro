@@ -17,11 +17,11 @@ if (!assertRuntimeIntegrity()) {
 const ui = new UiController(app);
 
 armClientShield(() => {
+  // Timing stalls must not remount UI (handled inside shield). Soft scrub only.
   scrubAuthCache();
-  ui.panicWipe();
 });
 
-window.addEventListener('pagehide', () => {
+globalThis.addEventListener('pagehide', () => {
   scrubAuthCache();
   ui.destroy();
 });

@@ -15,6 +15,7 @@ import {
 } from '../types';
 import {
   capacityBitsAt,
+  capacityBytesAt,
   capacityExceededMessage,
   containerByteLength,
   decodeFlags,
@@ -58,6 +59,7 @@ function buildContainer(
   return buf;
 }
 
+/** Clear LSBs with unsigned 8-bit mask (avoid `~mask` Int32 sign issues on clamped arrays). */
 function writeMultiLsb(
   pixels: Uint8ClampedArray,
   slots: Uint32Array,
@@ -65,7 +67,8 @@ function writeMultiLsb(
   density: LsbDensity,
   onProgress?: ProgressFn,
 ): void {
-  const mask = (1 << density) - 1;
+  const mask = ((1 << density) - 1) & 0xff;
+  const clear = (0xff ^ mask) & 0xff;
   const totalBits = data.length * 8;
   const slotCount = slotsNeededForBytes(data.length, density);
   let bitPos = 0;
@@ -73,16 +76,17 @@ function writeMultiLsb(
   for (let s = 0; s < slotCount; s++) {
     let chunk = 0;
     for (let i = 0; i < density; i++) {
-      chunk <<= 1;
+      chunk = (chunk << 1) & 0xff;
       if (bitPos < totalBits) {
         const byteI = (bitPos / 8) | 0;
         const bitInByte = 7 - (bitPos % 8);
-        chunk |= (data[byteI]! >> bitInByte) & 1;
+        chunk |= (data[byteI]! >>> bitInByte) & 1;
         bitPos++;
       }
     }
     const offset = slotToByteOffset(slots[s]!);
-    pixels[offset] = (pixels[offset]! & ~mask) | (chunk & mask);
+    const next = ((pixels[offset]! & clear) | (chunk & mask)) & 0xff;
+    pixels[offset] = next;
 
     if (onProgress && (s & 0x3fff) === 0) {
       onProgress(
@@ -101,15 +105,17 @@ function readMultiLsb(
   density: LsbDensity,
   bitOffset = 0,
 ): Uint8Array {
-  const mask = (1 << density) - 1;
+  const mask = ((1 << density) - 1) & 0xff;
   const out = new Uint8Array(byteCount);
   const totalBits = byteCount * 8;
   let bitPos = 0;
   let slotIdx = Math.floor(bitOffset / density);
   let skipBitsInSlot = bitOffset % density;
 
-  // Advance into the starting slot if bitOffset is mid-slot
   while (bitPos < totalBits) {
+    if (slotIdx >= slots.length) {
+      throw new Error('Leitura LSB excedeu permutação de slots');
+    }
     const offset = slotToByteOffset(slots[slotIdx]!);
     const chunk = pixels[offset]! & mask;
     for (let i = density - 1; i >= 0; i--) {
@@ -118,10 +124,10 @@ function readMultiLsb(
         continue;
       }
       if (bitPos >= totalBits) break;
-      const bit = (chunk >> i) & 1;
+      const bit = (chunk >>> i) & 1;
       const byteI = (bitPos / 8) | 0;
       const bitInByte = 7 - (bitPos % 8);
-      out[byteI] = out[byteI]! | (bit << bitInByte);
+      out[byteI] = (out[byteI]! | (bit << bitInByte)) & 0xff;
       bitPos++;
     }
     slotIdx++;
@@ -138,12 +144,14 @@ async function prepareSlots(
   const seed = await deriveSeed(keyBytes);
   const prng = createPcg32(seed);
   const universe = width * height * CHANNELS_PER_PIXEL;
+  if (slotCount > universe) {
+    throw new Error(
+      `Slots insuficientes: pedido ${slotCount}, universo ${universe}`,
+    );
+  }
   return uniqueIndices(prng, universe, slotCount);
 }
 
-/**
- * Embed arbitrary binary secret using adaptive density + optional deflate-raw.
- */
 export async function embed(
   req: EmbedRequest,
   onProgress?: ProgressFn,
@@ -162,16 +170,11 @@ export async function embed(
   if (compressed.compressed) {
     onProgress?.(
       14,
-      `Compressão ativa (−${((1 - compressed.ratio) * 100).toFixed(1)}%)`,
+      `Compressão ativa (−${((1 - compressed.ratio) * 100).toFixed(1)}%) · payload ${compressed.bytes.length} B`,
     );
   } else {
-    onProgress?.(14, 'Compressão omitida (ganho nulo ou mídia já compactada)');
+    onProgress?.(14, `Compressão omitida · payload ${compressed.bytes.length} B`);
   }
-
-  // Density is chosen then encoded in flags; build container with chosen density.
-  // We need density before buildContainer for flags — select based on container size.
-  // Container size depends on flags (1 byte fixed) — circular only on density value inside flags.
-  // Probe: pick density for size with any flags byte, then rebuild with correct flags.
 
   const provisionalLen = containerByteLength(
     metaBytes.length,
@@ -182,7 +185,9 @@ export async function embed(
     throw new Error(
       capacityExceededMessage(
         provisionalLen,
-        Math.floor(capacityBitsAt(req.width, req.height, 3) / 8),
+        capacityBytesAt(req.width, req.height, 3),
+        req.width,
+        req.height,
       ),
     );
   }
@@ -191,11 +196,26 @@ export async function embed(
   const container = buildContainer(auth, flags, metaBytes, compressed.bytes);
   const bitsNeeded = container.length * 8;
   const capacityBits = capacityBitsAt(req.width, req.height, density);
-
-  onProgress?.(18, `Densidade ${density}-LSB selecionada automaticamente`);
-  onProgress?.(22, 'PRNG inicializado — permutação Fisher-Yates');
-
   const slotCount = slotsNeededForBytes(container.length, density);
+  const universe = req.width * req.height * CHANNELS_PER_PIXEL;
+
+  if (bitsNeeded > capacityBits || slotCount > universe) {
+    throw new Error(
+      capacityExceededMessage(
+        container.length,
+        capacityBytesAt(req.width, req.height, 3),
+        req.width,
+        req.height,
+      ),
+    );
+  }
+
+  onProgress?.(
+    18,
+    `Densidade ${density}-LSB · envelope ${container.length} B · slots ${slotCount}/${universe}`,
+  );
+  onProgress?.(22, 'PRNG — permutação Fisher-Yates sem colisão');
+
   const slots = await prepareSlots(req.keyBytes, req.width, req.height, slotCount);
 
   const pixels = new Uint8ClampedArray(req.imageData);
@@ -203,7 +223,7 @@ export async function embed(
     pixels[i] = 255;
   }
 
-  onProgress?.(28, `Injetando container oculto (${density}-LSB disperso)`);
+  onProgress?.(28, `Injetando container (${density}-LSB, Alpha intacto)`);
   writeMultiLsb(pixels, slots, container, density, (p, m) => {
     onProgress?.(28 + Math.round(p * 0.65), m);
   });
@@ -223,9 +243,6 @@ export async function embed(
   };
 }
 
-/**
- * Extract: probe densities 1→3 until Auth Checksum + flags density agree.
- */
 export async function extract(
   req: ExtractRequest,
   onProgress?: ProgressFn,
@@ -268,9 +285,8 @@ export async function extract(
   }
 
   const { compressed } = decodeFlags(flagsByte);
-  onProgress?.(30, `Checksum validado — modo ${density}-LSB`);
+  onProgress?.(30, `Checksum OK — modo ${density}-LSB`);
 
-  // Read meta length: auth + flags + 2
   const headerPrefixLen = AUTH_CHECKSUM_SIZE + FLAGS_SIZE + META_LENGTH_SIZE;
   const prefixSlots = await prepareSlots(
     req.keyBytes,
@@ -296,7 +312,7 @@ export async function extract(
     throw new Error('Chave inválida ou nenhum dado detectado');
   }
 
-  onProgress?.(45, 'Lendo metadados do container');
+  // Read payload length from prefix of full header without re-permuting twice for body.
   const headerSlots = await prepareSlots(
     req.keyBytes,
     req.width,
@@ -328,13 +344,15 @@ export async function extract(
     throw new Error('Chave inválida ou nenhum dado detectado');
   }
 
-  const payloadLen = headerView.getUint32(metaStart + metaLen, false);
+  const payloadLen = headerView.getUint32(metaStart + metaLen, false) >>> 0;
   const totalBytes = afterMeta + payloadLen;
-  if (totalBytes * 8 > capacityBitsAt(req.width, req.height, density)) {
+  const capacityBits = capacityBitsAt(req.width, req.height, density);
+  if (totalBytes * 8 > capacityBits) {
     throw new Error('Chave inválida ou nenhum dado detectado');
   }
 
-  onProgress?.(60, `Extraindo payload (${payloadLen} bytes)`);
+  onProgress?.(55, `Payload declarado: ${payloadLen} B · envelope ${totalBytes} B`);
+  // Single full permutation for payload extraction (prefix matches prior prepares).
   const allSlots = await prepareSlots(
     req.keyBytes,
     req.width,
@@ -349,7 +367,7 @@ export async function extract(
     afterMeta * 8,
   );
 
-  onProgress?.(85, compressed ? 'Descomprimindo payload (deflate-raw)' : 'Payload bruto');
+  onProgress?.(85, compressed ? 'Descomprimindo (deflate-raw)' : 'Payload bruto');
   const payload = await maybeDecompress(stored, compressed);
 
   onProgress?.(100, 'Arquivo reconstruído bit-a-bit');

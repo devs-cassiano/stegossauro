@@ -19,6 +19,12 @@ export class StegoWorkerClient {
   private worker: Worker | null = null;
   private pending = new Map<string, Pending>();
   private seq = 0;
+  private onTerminated: (() => void) | null = null;
+
+  /** Optional audit hook when the worker thread is fully released. */
+  setOnTerminated(cb: (() => void) | null): void {
+    this.onTerminated = cb;
+  }
 
   private ensureWorker(): Worker {
     if (this.worker) return this.worker;
@@ -118,7 +124,13 @@ export class StegoWorkerClient {
   }
 
   terminate(): void {
-    this.worker?.terminate();
+    if (!this.worker) return;
+    this.worker.terminate();
     this.worker = null;
+    try {
+      this.onTerminated?.();
+    } catch {
+      /* ignore audit hook failures */
+    }
   }
 }

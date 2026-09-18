@@ -6,13 +6,16 @@ import {
 } from '../crypto/keys';
 import {
   capacityExceededMessage,
+  capacityBytesAt,
   computeCapacity,
   containerByteLength,
   preserveFileName,
   selectDensity,
 } from '../stego/capacity';
 import { exportPngBlob, purgeCoverImage } from '../stego/canvas';
+import { maybeCompress } from '../stego/compress';
 import type { AuditEntry, AuditLevel, CoverImageInfo } from '../types';
+import { beginHeavyWork, endHeavyWork } from '../security/shield';
 import { zeroize } from '../security/zeroize';
 import {
   fallbackRestoredName,
@@ -58,6 +61,7 @@ export class UiController {
   private lastSecretName = fallbackRestoredName();
   private lastKeyFileName = suggestNeutralKeyName();
   private docAbort: AbortController | null = null;
+  private capacityPreviewGen = 0;
 
   constructor(root: HTMLElement) {
     this.root = root;
@@ -258,25 +262,37 @@ export class UiController {
     const card = this.$(cardId);
     const input = this.$(inputId) as HTMLInputElement;
 
-    const open = () => input.click();
+    const open = (e?: Event) => {
+      e?.preventDefault();
+      e?.stopPropagation();
+      input.click();
+    };
     card.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
       if ((e.target as HTMLElement).closest('.btn-icon-clear')) return;
       open();
     });
     card.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' || e.key === ' ') {
         e.preventDefault();
+        e.stopPropagation();
         open();
       }
     });
 
-    card.addEventListener('dragover', (e) => {
+    const blockNav = (e: DragEvent) => {
       e.preventDefault();
+      e.stopPropagation();
+    };
+    card.addEventListener('dragenter', blockNav);
+    card.addEventListener('dragover', (e) => {
+      blockNav(e);
       card.classList.add('dragover');
     });
     card.addEventListener('dragleave', () => card.classList.remove('dragover'));
     card.addEventListener('drop', (e) => {
-      e.preventDefault();
+      blockNav(e);
       card.classList.remove('dragover');
       const files = e.dataTransfer?.files;
       if (files && files.length > 0) onFiles(files);
@@ -350,29 +366,55 @@ export class UiController {
     );
 
     this.$('#btn-clear-secret').addEventListener('click', (e) => {
+      e.preventDefault();
       e.stopPropagation();
       this.clearSecret();
     });
     this.$('#btn-clear-cover').addEventListener('click', (e) => {
+      e.preventDefault();
       e.stopPropagation();
       this.clearCover();
     });
     this.$('#btn-clear-stego').addEventListener('click', (e) => {
+      e.preventDefault();
       e.stopPropagation();
       this.clearStego();
     });
 
-    this.$('#btn-regen').addEventListener('click', () => this.regenerateKey());
-    this.$('#btn-copy').addEventListener('click', () => void this.copyKey());
-    this.$('#btn-download-key').addEventListener('click', () => this.downloadKeyFile());
-    this.$('#btn-embed').addEventListener('click', () => void this.runEmbed());
-    this.$('#btn-download-png').addEventListener('click', () => this.downloadLastPng());
-    this.$('#btn-extract').addEventListener('click', () => void this.runExtract());
-    this.$('#btn-download-secret').addEventListener('click', () =>
-      this.downloadLastSecret(),
-    );
-    this.$('#btn-clear-audit').addEventListener('click', () => this.clearAudit());
-    this.$('#btn-reshuffle-name').addEventListener('click', () => {
+    this.$('#btn-regen').addEventListener('click', (e) => {
+      e.preventDefault();
+      this.regenerateKey();
+    });
+    this.$('#btn-copy').addEventListener('click', (e) => {
+      e.preventDefault();
+      void this.copyKey();
+    });
+    this.$('#btn-download-key').addEventListener('click', (e) => {
+      e.preventDefault();
+      this.downloadKeyFile();
+    });
+    this.$('#btn-embed').addEventListener('click', (e) => {
+      e.preventDefault();
+      void this.runEmbed();
+    });
+    this.$('#btn-download-png').addEventListener('click', (e) => {
+      e.preventDefault();
+      this.downloadLastPng();
+    });
+    this.$('#btn-extract').addEventListener('click', (e) => {
+      e.preventDefault();
+      void this.runExtract();
+    });
+    this.$('#btn-download-secret').addEventListener('click', (e) => {
+      e.preventDefault();
+      this.downloadLastSecret();
+    });
+    this.$('#btn-clear-audit').addEventListener('click', (e) => {
+      e.preventDefault();
+      this.clearAudit();
+    });
+    this.$('#btn-reshuffle-name').addEventListener('click', (e) => {
+      e.preventDefault();
       this.refreshOutputNameSuggestion(true);
     });
     this.$('#output-name').addEventListener('change', () => this.syncOutputNameField());
@@ -382,12 +424,23 @@ export class UiController {
 
     this.docAbort?.abort();
     this.docAbort = new AbortController();
+    const { signal } = this.docAbort;
+
+    // Dropping files outside drop-zones navigates the tab (looks like a reload).
+    const blockDocNav = (e: DragEvent) => {
+      e.preventDefault();
+    };
+    document.addEventListener('dragover', blockDocNav, { signal });
+    document.addEventListener('drop', blockDocNav, { signal });
+    window.addEventListener('dragover', blockDocNav, { signal });
+    window.addEventListener('drop', blockDocNav, { signal });
+
     document.addEventListener(
       'visibilitychange',
       () => {
         if (document.hidden) this.revokeAllUrls();
       },
-      { signal: this.docAbort.signal },
+      { signal },
     );
   }
 
@@ -568,18 +621,27 @@ export class UiController {
     const file = input.files?.[0];
     if (!file) return;
 
-    this.clearEmbedResult();
-    this.secretFile = file;
-    this.secretBytes = new Uint8Array(await file.arrayBuffer());
-    const name = preserveFileName(file.name);
-    const mime = file.type || 'application/octet-stream';
-    this.setDropFileState('secret', name, `${formatBytes(file.size)} · ${mime}`);
+    beginHeavyWork();
+    try {
+      this.clearEmbedResult();
+      zeroize(this.secretBytes);
+      this.secretBytes = null;
 
-    this.issueKey();
-    this.tickStatusTime();
-    this.log('info', `Secreto: ${name} (${formatBytes(file.size)})`);
-    this.updateEmbedEnabled();
-    this.checkCapacityPreview();
+      this.secretFile = file;
+      this.secretBytes = new Uint8Array(await file.arrayBuffer());
+      const name = preserveFileName(file.name);
+      const mime = file.type || 'application/octet-stream';
+      this.setDropFileState('secret', name, `${formatBytes(file.size)} · ${mime}`);
+
+      this.issueKey();
+      this.tickStatusTime();
+      this.log('info', `Secreto: ${name} (${formatBytes(file.size)})`);
+      this.log('info', `Payload bruto em RAM: ${this.secretBytes.length} bytes`);
+      this.updateEmbedEnabled();
+      this.checkCapacityPreview();
+    } finally {
+      endHeavyWork();
+    }
   }
 
   private async onCoverSelected(e: Event): Promise<void> {
@@ -587,13 +649,28 @@ export class UiController {
     const file = input.files?.[0];
     if (!file) return;
 
-    this.clearEmbedResult();
+    beginHeavyWork();
     try {
+      this.clearEmbedResult();
+      zeroize(this.coverPixels);
+      this.coverPixels = null;
+      this.coverInfo = null;
+      this.revokeAllUrls();
+
       this.log('info', `Disfarce: ${preserveFileName(file.name)}`);
       const purged = await purgeCoverImage(file);
+      if (purged.width < 1 || purged.height < 1) {
+        throw new Error('Dimensões da imagem inválidas (0×0)');
+      }
+      if (purged.imageData.length !== purged.width * purged.height * 4) {
+        throw new Error(
+          `Buffer de pixels inconsistente: ${purged.imageData.length} B para ${purged.width}×${purged.height}`,
+        );
+      }
       this.coverPixels = purged.imageData;
       this.coverInfo = computeCapacity(purged.width, purged.height);
       const mp = this.coverInfo.megapixels.toFixed(2);
+      const pixels = purged.width * purged.height;
 
       this.setDropFileState(
         'cover',
@@ -601,7 +678,16 @@ export class UiController {
         `${purged.width}×${purged.height} · ${mp} MP · máx ${formatBytes(this.coverInfo.capacityBytes3)}`,
       );
 
-      this.log('ok', `Sanitizado ${purged.width}×${purged.height} (${mp} MP)`);
+      this.log(
+        'ok',
+        `Sanitizado ${purged.width}×${purged.height} (natural) · ${mp} MP · ${pixels.toLocaleString('pt-BR')} px · slots RGB ${(pixels * 3).toLocaleString('pt-BR')}`,
+      );
+      this.log(
+        'info',
+        `Capacidade 3-LSB: ${(purged.width * purged.height * 9 / 8).toLocaleString('pt-BR')} B ` +
+          `(${(this.coverInfo.capacityBytes3 / 1_000_000).toFixed(2)} MB) · ` +
+          `1-LSB ${formatBytes(this.coverInfo.capacityBytes1)} · 2-LSB ${formatBytes(this.coverInfo.capacityBytes2)}`,
+      );
       this.tickStatusTime();
       this.updateEmbedEnabled();
       this.checkCapacityPreview();
@@ -611,34 +697,58 @@ export class UiController {
       this.setDropFileState('cover', null, null);
       this.log('error', err instanceof Error ? err.message : 'Erro no disfarce');
       this.updateEmbedEnabled();
+    } finally {
+      endHeavyWork();
     }
   }
 
   private checkCapacityPreview(): void {
+    void this.runCapacityPreview();
+  }
+
+  private async runCapacityPreview(): Promise<void> {
+    const gen = ++this.capacityPreviewGen;
     const badge = this.$('#plan-badge');
     if (!this.secretBytes || !this.coverInfo || !this.secretFile) {
       badge.textContent = 'Aguardando arquivos…';
       return;
     }
+
+    const { width, height, capacityBytes3 } = this.coverInfo;
+    if (width < 1 || height < 1) {
+      badge.innerHTML =
+        `<span style="color:var(--err)">Dimensões da imagem inválidas (0×0)</span>`;
+      this.log('error', 'Disfarce com dimensões 0×0 — recarregue a imagem');
+      return;
+    }
+
+    badge.textContent = 'Avaliando compressão e capacidade…';
+    const metaName = preserveFileName(this.secretFile.name);
     const metaBytes = new TextEncoder().encode(
       JSON.stringify({
-        name: preserveFileName(this.secretFile.name),
+        name: metaName,
         mimeType: this.secretFile.type || 'application/octet-stream',
       }),
     ).length;
-    const needed = containerByteLength(metaBytes, this.secretBytes.length);
-    const density = selectDensity(
-      this.coverInfo.width,
-      this.coverInfo.height,
-      needed,
-    );
+
+    const compressed = await maybeCompress(this.secretBytes, metaName);
+    if (gen !== this.capacityPreviewGen) return;
+
+    const payloadLen = compressed.bytes.length;
+    const needed = containerByteLength(metaBytes, payloadLen);
+    const density = selectDensity(width, height, needed);
+    const cap3 = capacityBytes3 > 0 ? capacityBytes3 : capacityBytesAt(width, height, 3);
 
     if (!density) {
-      badge.innerHTML =
-        `<span style="color:var(--err)">Sem capacidade em 3-LSB — use imagem maior</span>`;
+      const msg = capacityExceededMessage(needed, cap3, width, height);
+      badge.innerHTML = `<span style="color:var(--err)">${escapeHtml(msg)}</span>`;
+      this.log('error', msg);
       this.log(
-        'error',
-        capacityExceededMessage(needed, this.coverInfo.capacityBytes3),
+        'info',
+        `Disfarce ${width}×${height} · capacidade 3-LSB ${(width * height * 9 / 8).toLocaleString('pt-BR')} B · payload pós-compressão ${payloadLen.toLocaleString('pt-BR')} B` +
+          (compressed.compressed
+            ? ` (−${((1 - compressed.ratio) * 100).toFixed(1)}%)`
+            : ' (bruto)'),
       );
       return;
     }
@@ -650,11 +760,17 @@ export class UiController {
           ? this.coverInfo.capacityBytes2
           : this.coverInfo.capacityBytes3;
     const ratio = (needed / cap) * 100;
+    const compLabel = compressed.compressed
+      ? `compressão −${((1 - compressed.ratio) * 100).toFixed(1)}%`
+      : 'sem compressão';
     badge.innerHTML =
-      `<strong>${density}-LSB</strong> · ~${ratio.toFixed(0)}% · compressão no worker`;
+      `<strong>${density}-LSB</strong> · ${ratio.toFixed(1)}% · ${compLabel}`;
     this.log(
       'info',
-      `Plano: ${density}-LSB · ${formatBytes(needed)} / ${formatBytes(cap)}`,
+      `Plano: ${density}-LSB · envelope ${formatBytes(needed)} / ${formatBytes(cap)} · ` +
+        `payload ${formatBytes(payloadLen)}` +
+        (compressed.compressed ? ` (original ${formatBytes(this.secretBytes.length)})` : '') +
+        ` · disfarce ${width}×${height}`,
     );
   }
 
@@ -671,6 +787,13 @@ export class UiController {
       return;
     }
 
+    if (this.coverInfo.width < 1 || this.coverInfo.height < 1) {
+      const msg = 'Dimensões da imagem inválidas (0×0). Recarregue o disfarce.';
+      this.setFlash('#embed-flash', 'error', msg);
+      this.log('error', msg);
+      return;
+    }
+
     const metaName = preserveFileName(this.secretFile.name);
     const metaBytesLen = new TextEncoder().encode(
       JSON.stringify({
@@ -678,9 +801,25 @@ export class UiController {
         mimeType: this.secretFile.type || 'application/octet-stream',
       }),
     ).length;
-    const needed = containerByteLength(metaBytesLen, this.secretBytes.length);
+
+    // Capacity gate uses post-compression payload (same heuristic as the worker).
+    beginHeavyWork();
+    let compressedPreview;
+    try {
+      compressedPreview = await maybeCompress(this.secretBytes, metaName);
+    } finally {
+      endHeavyWork();
+    }
+
+    const needed = containerByteLength(metaBytesLen, compressedPreview.bytes.length);
+    const cap3 = this.coverInfo.capacityBytes3;
     if (needed * 8 > this.coverInfo.capacityBits3) {
-      const msg = capacityExceededMessage(needed, this.coverInfo.capacityBytes3);
+      const msg = capacityExceededMessage(
+        needed,
+        cap3,
+        this.coverInfo.width,
+        this.coverInfo.height,
+      );
       this.setFlash('#embed-flash', 'error', msg);
       this.log('error', msg);
       return;
@@ -689,8 +828,16 @@ export class UiController {
     (this.$('#btn-embed') as HTMLButtonElement).disabled = true;
     this.setFlash('#embed-flash', null);
     this.setProgress('#embed-progress', '#embed-fill', '#embed-status', 1, 'Processando…');
-    this.log('info', 'Worker iniciado');
+    this.log(
+      'info',
+      `Worker iniciado · payload ${formatBytes(compressedPreview.bytes.length)}` +
+        (compressedPreview.compressed
+          ? ` (comprimido de ${formatBytes(this.secretBytes.length)})`
+          : ' (bruto)') +
+        ` · disfarce ${this.coverInfo.width}×${this.coverInfo.height}`,
+    );
     this.tickStatusTime();
+    beginHeavyWork();
 
     // Dedicated copies for Transferable postMessage (keep originals for retry).
     const imageCopy = new Uint8ClampedArray(this.coverPixels);
@@ -717,7 +864,9 @@ export class UiController {
             percent === 28 ||
             percent >= 95 ||
             message.includes('Compressão') ||
-            message.includes('Densidade')
+            message.includes('Densidade') ||
+            message.includes('payload') ||
+            message.includes('slots')
           ) {
             this.log('info', message);
           }
@@ -729,12 +878,13 @@ export class UiController {
         : 'Inativa';
       this.$('#plan-badge').innerHTML =
         `<strong>${result.density}-LSB</strong> · Compressão: ${compLabel} · ` +
-        `${(result.occupancyRatio * 100).toFixed(0)}%`;
+        `${(result.occupancyRatio * 100).toFixed(1)}%`;
 
       this.log(
         'ok',
-        `${result.density}-LSB · ${formatBytes(result.storedBytes)}` +
-          (result.compressed ? ` (de ${formatBytes(result.originalBytes)})` : ''),
+        `LSB ${result.density} · armazenado ${formatBytes(result.storedBytes)}` +
+          (result.compressed ? ` (original ${formatBytes(result.originalBytes)})` : '') +
+          ` · ocupação ${(result.occupancyRatio * 100).toFixed(2)}%`,
       );
 
       this.setProgress('#embed-progress', '#embed-fill', '#embed-status', 96, 'Montando PNG…');
@@ -764,6 +914,8 @@ export class UiController {
     } finally {
       zeroize(imageCopy);
       zeroize(secretCopy);
+      endHeavyWork();
+      this.log('ok', 'Web Worker encerrado — heap da thread liberado');
       this.updateEmbedEnabled();
     }
   }
@@ -780,22 +932,29 @@ export class UiController {
     const file = input.files?.[0];
     if (!file) return;
 
+    beginHeavyWork();
     this.lastSecretBlob = null;
     this.$('#extract-result').style.display = 'none';
     this.setFlash('#extract-flash', null);
 
     try {
+      zeroize(this.extractPixels);
+      this.extractPixels = null;
       this.log('info', `Imagem: ${preserveFileName(file.name)}`);
       const purged = await purgeCoverImage(file);
       this.extractPixels = purged.imageData;
       this.extractWidth = purged.width;
       this.extractHeight = purged.height;
+      const px = purged.width * purged.height;
       this.setDropFileState(
         'stego',
         preserveFileName(file.name),
         `${purged.width}×${purged.height}`,
       );
-      this.log('ok', 'Pixels em RAM');
+      this.log(
+        'ok',
+        `Pixels em RAM: ${purged.width}×${purged.height} · ${px.toLocaleString('pt-BR')} px · slots RGB ${(px * 3).toLocaleString('pt-BR')}`,
+      );
       this.tickStatusTime();
       this.updateExtractEnabled();
     } catch (err) {
@@ -803,6 +962,8 @@ export class UiController {
       this.setDropFileState('stego', null, null);
       this.log('error', err instanceof Error ? err.message : 'Erro ao ler imagem');
       this.updateExtractEnabled();
+    } finally {
+      endHeavyWork();
     }
   }
 
@@ -825,6 +986,7 @@ export class UiController {
     this.setProgress('#extract-progress', '#extract-fill', '#extract-status', 1, 'Processando…');
     this.log('info', 'Extraindo…');
     this.tickStatusTime();
+    beginHeavyWork();
 
     const imageCopy = new Uint8ClampedArray(this.extractPixels);
 
@@ -838,7 +1000,7 @@ export class UiController {
         },
         (percent, message) => {
           this.setProgress('#extract-progress', '#extract-fill', '#extract-status', percent, message);
-          if (percent === 30 || percent === 100 || message.includes('Descomprimindo')) {
+          if (percent === 30 || percent === 55 || percent === 100 || message.includes('Descomprimindo') || message.includes('Payload')) {
             this.log('ok', message);
           } else if (percent === 12 || percent === 60) {
             this.log('info', message);
@@ -875,6 +1037,9 @@ export class UiController {
       this.lastSecretBlob = null;
     } finally {
       zeroize(imageCopy);
+      zeroize(keyBytes);
+      endHeavyWork();
+      this.log('ok', 'Web Worker encerrado — heap da thread liberado');
       this.updateExtractEnabled();
     }
   }
