@@ -63,6 +63,8 @@ export class UiController {
   private capacityPreviewGen = 0;
   /** True after a successful embed until inputs are cleared/replaced. */
   private embedCompleted = false;
+  /** True after a successful extract until stego input is cleared/replaced. */
+  private extractCompleted = false;
 
   constructor(root: HTMLElement) {
     this.root = root;
@@ -98,6 +100,7 @@ export class UiController {
     this.lastPngBlob = null;
     this.lastSecretBlob = null;
     this.embedCompleted = false;
+    this.extractCompleted = false;
     this.audit = [];
     this.worker.terminate();
     this.revokeAllUrls();
@@ -185,7 +188,13 @@ export class UiController {
             <div class="key-tools">
               <button class="tool-btn" type="button" id="btn-regen" disabled title="Gerar" aria-label="Gerar">↻</button>
               <button class="tool-btn" type="button" id="btn-copy" disabled title="Copiar" aria-label="Copiar">⎘</button>
-              <button class="tool-btn" type="button" id="btn-download-key" disabled title="Salvar" aria-label="Salvar">💾</button>
+              <button class="tool-btn" type="button" id="btn-download-key" disabled title="Baixar chave (.key)" aria-label="Baixar chave de acesso">
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                  <polyline points="7 10 12 15 17 10"/>
+                  <line x1="12" y1="15" x2="12" y2="3"/>
+                </svg>
+              </button>
             </div>
           </div>
           <div class="entropy" id="key-entropy"></div>
@@ -229,7 +238,14 @@ export class UiController {
           <div class="field-hint">PNG gerado anteriormente.</div>
           <div class="drop-wrap">
             <label class="drop-card" id="drop-stego" for="input-stego">
-              <div class="drop-icon" aria-hidden="true">▢</div>
+              <div class="drop-icon" aria-hidden="true">
+                <svg class="drop-svg" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                  <polyline points="14 2 14 8 20 8"/>
+                  <path d="M10 13a2 2 0 1 0 4 0 2 2 0 0 0-4 0z"/>
+                  <path d="M12 15v3"/>
+                </svg>
+              </div>
               <div class="drop-body">
                 <div class="drop-placeholder" id="stego-placeholder">Solte a imagem ou clique para escolher</div>
                 <div class="drop-name" id="stego-name" hidden></div>
@@ -253,9 +269,9 @@ export class UiController {
           <div class="progress-label" id="extract-status">Aguardando…</div>
         </div>
         <div class="flash" id="extract-flash"></div>
-        <div class="result-actions" id="extract-result" style="display:none">
-          <button class="btn btn-primary" type="button" id="btn-download-secret">Baixar arquivo</button>
+        <div class="result-actions extract-result" id="extract-result" hidden>
           <span class="meta" id="extract-meta"></span>
+          <button class="btn btn-primary" type="button" id="btn-download-secret">Baixar arquivo extraído</button>
         </div>
       </section>
 
@@ -568,7 +584,8 @@ export class UiController {
     this.lastSecretBlob = null;
     (this.$('#input-stego') as HTMLInputElement).value = '';
     this.setDropFileState('stego', null, null);
-    this.$('#extract-result').style.display = 'none';
+    this.unlockPostExtract();
+    this.hideExtractDownload();
     this.setFlash('#extract-flash', null);
     this.updateExtractEnabled();
   }
@@ -619,6 +636,36 @@ export class UiController {
     if (embedBtn.textContent !== 'Ocultar') {
       embedBtn.textContent = 'Ocultar';
     }
+  }
+
+  private lockPostExtract(): void {
+    this.extractCompleted = true;
+    const extractBtn = this.$('#btn-extract') as HTMLButtonElement;
+    extractBtn.disabled = true;
+    extractBtn.textContent = 'Extração concluída';
+    this.showExtractDownload();
+  }
+
+  private unlockPostExtract(): void {
+    this.extractCompleted = false;
+    const extractBtn = this.$('#btn-extract') as HTMLButtonElement;
+    extractBtn.textContent = 'Extrair';
+  }
+
+  private showExtractDownload(): void {
+    const panel = this.$('#extract-result');
+    panel.hidden = false;
+    panel.classList.add('visible');
+    const btn = this.$('#btn-download-secret') as HTMLButtonElement;
+    btn.textContent = 'Baixar arquivo extraído';
+    btn.disabled = false;
+  }
+
+  private hideExtractDownload(): void {
+    const panel = this.$('#extract-result');
+    panel.hidden = true;
+    panel.classList.remove('visible');
+    this.$('#extract-meta').textContent = '';
   }
 
   private switchTab(tab: 'hide' | 'extract'): void {
@@ -687,9 +734,16 @@ export class UiController {
 
   private updateExtractEnabled(): void {
     this.ensureFileInputsInteractive();
+    const extractBtn = this.$('#btn-extract') as HTMLButtonElement;
+    if (this.extractCompleted) {
+      extractBtn.disabled = true;
+      extractBtn.textContent = 'Extração concluída';
+      return;
+    }
     const key = (this.$('#extract-key') as HTMLInputElement).value.trim();
     const ok = !!this.extractPixels && key.length > 0;
-    (this.$('#btn-extract') as HTMLButtonElement).disabled = !ok;
+    extractBtn.disabled = !ok;
+    extractBtn.textContent = 'Extrair';
   }
 
   private issueKey(): void {
@@ -1052,8 +1106,9 @@ export class UiController {
     if (!file) return;
 
     beginHeavyWork();
+    this.unlockPostExtract();
     this.lastSecretBlob = null;
-    this.$('#extract-result').style.display = 'none';
+    this.hideExtractDownload();
     this.setFlash('#extract-flash', null);
 
     try {
@@ -1086,7 +1141,7 @@ export class UiController {
   }
 
   private async runExtract(): Promise<void> {
-    if (!this.extractPixels) return;
+    if (!this.extractPixels || this.extractCompleted) return;
     const rawKey = (this.$('#extract-key') as HTMLInputElement).value;
 
     let keyBytes: Uint8Array;
@@ -1133,7 +1188,6 @@ export class UiController {
 
       this.$('#extract-meta').innerHTML =
         `<strong>${escapeHtml(this.lastSecretName)}</strong> · ${formatBytes(result.payload.length)} · ${escapeHtml(result.metadata.mimeType)}`;
-      this.$('#extract-result').style.display = 'flex';
 
       this.setProgress('#extract-progress', '#extract-fill', '#extract-status', 100, 'Pronto');
       this.setFlash('#extract-flash', 'ok', 'Arquivo restaurado.');
@@ -1142,6 +1196,7 @@ export class UiController {
         `OK — ${this.lastSecretName} (${formatBytes(result.payload.length)}) · ${result.density}-LSB` +
           (result.compressed ? ' · deflate' : ''),
       );
+      this.lockPostExtract();
       zeroize(result.payload);
       zeroize(payloadCopy);
     } catch (err) {
@@ -1149,7 +1204,7 @@ export class UiController {
         err instanceof Error ? err.message : 'Chave inválida ou nenhum dado detectado';
       this.setFlash('#extract-flash', 'error', msg);
       this.log('error', msg);
-      this.$('#extract-result').style.display = 'none';
+      this.hideExtractDownload();
       this.lastSecretBlob = null;
     } finally {
       zeroize(imageCopy);
