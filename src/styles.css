@@ -116,13 +116,6 @@ body {
   flex-shrink: 0;
 }
 
-.status-pill .time {
-  color: var(--text-muted);
-  font-family: var(--mono);
-  font-size: 0.72rem;
-  letter-spacing: 0.5px;
-}
-
 /* —— Segmented control —— */
 .segment {
   display: grid;
@@ -214,18 +207,25 @@ body {
 }
 
 /* —— Drop cards —— */
+.drop-wrap {
+  position: relative;
+  pointer-events: auto;
+}
+
 .drop-card {
   position: relative;
-  background: var(--bg-surface);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius);
-  padding: 1.5rem 2rem;
-  cursor: pointer;
-  transition: border-color 0.15s, background 0.15s;
-  min-height: 120px;
   display: flex;
   align-items: center;
   gap: 1rem;
+  min-height: 120px;
+  padding: 1.5rem 2.75rem 1.5rem 2rem;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+  pointer-events: auto;
+  user-select: none;
 }
 
 .drop-card:hover,
@@ -235,7 +235,7 @@ body {
 }
 
 .drop-card.has-file {
-  cursor: default;
+  cursor: pointer; /* still clickable to replace file */
 }
 
 .drop-icon {
@@ -250,11 +250,13 @@ body {
   color: var(--text-code);
   font-size: 1.35rem;
   flex-shrink: 0;
+  pointer-events: none;
 }
 
 .drop-body {
   flex: 1;
   min-width: 0;
+  pointer-events: none;
 }
 
 .drop-placeholder {
@@ -292,11 +294,16 @@ body {
   cursor: pointer;
   font-size: 1.25rem;
   line-height: 1;
-  flex-shrink: 0;
   display: none;
+  position: absolute;
+  top: 50%;
+  right: 0.75rem;
+  transform: translateY(-50%);
+  z-index: 2;
+  pointer-events: auto;
 }
 
-.drop-card.has-file .btn-icon-clear {
+.drop-wrap.has-file .btn-icon-clear {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -307,8 +314,20 @@ body {
   background: var(--accent-subtle);
 }
 
-input[type='file'] {
-  display: none;
+/* Visually hidden but present — activated via label[for], never pointer-events:none on the card */
+.file-input,
+input[type='file'].file-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+  opacity: 0;
+  pointer-events: none; /* card/label receives clicks; input stays enabled for .click() */
 }
 
 /* —— Inputs —— */
@@ -677,7 +696,7 @@ input[type='file'] {
   }
 
   .drop-card {
-    padding: 1.25rem 1.25rem;
+    padding: 1.25rem 2.5rem 1.25rem 1.25rem;
     min-height: 110px;
   }
 

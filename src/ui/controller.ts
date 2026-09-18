@@ -72,7 +72,6 @@ export class UiController {
     this.renderShell();
     this.bindGlobal();
     this.refreshOutputNameSuggestion();
-    this.tickStatusTime();
     this.log('info', 'Online · 100% local · CSP connect-src none');
   }
 
@@ -110,11 +109,6 @@ export class UiController {
     return el as HTMLElement;
   }
 
-  private tickStatusTime(): void {
-    const el = this.root.querySelector('#status-time');
-    if (el) el.textContent = formatTime(Date.now());
-  }
-
   private renderShell(): void {
     this.root.innerHTML = `
       <header class="header">
@@ -122,7 +116,6 @@ export class UiController {
         <div class="status-bar">
           <span class="status-pill"><span class="dot"></span> Processado localmente</span>
           <span class="status-pill">100% offline</span>
-          <span class="status-pill"><span class="time" id="status-time">--:--</span></span>
         </div>
       </header>
 
@@ -136,30 +129,34 @@ export class UiController {
           <div class="field">
             <div class="field-label">Arquivo Secreto</div>
             <div class="field-hint">Qualquer formato (PDF, vídeo, zip, dados brutos).</div>
-            <div class="drop-card" id="drop-secret" tabindex="0" role="button">
-              <div class="drop-icon" aria-hidden="true">+</div>
-              <div class="drop-body">
-                <div class="drop-placeholder" id="secret-placeholder">Solte o arquivo ou clique para escolher</div>
-                <div class="drop-name" id="secret-name" hidden></div>
-                <div class="drop-size" id="secret-size" hidden></div>
-              </div>
+            <div class="drop-wrap">
+              <label class="drop-card" id="drop-secret" for="input-secret">
+                <div class="drop-icon" aria-hidden="true">+</div>
+                <div class="drop-body">
+                  <div class="drop-placeholder" id="secret-placeholder">Solte o arquivo ou clique para escolher</div>
+                  <div class="drop-name" id="secret-name" hidden></div>
+                  <div class="drop-size" id="secret-size" hidden></div>
+                </div>
+              </label>
               <button class="btn-icon-clear" type="button" id="btn-clear-secret" title="Remover" aria-label="Remover">×</button>
-              <input type="file" id="input-secret" />
+              <input type="file" id="input-secret" class="file-input" tabindex="-1" />
             </div>
           </div>
 
           <div class="field">
             <div class="field-label">Imagem de Disfarce</div>
             <div class="field-hint">PNG ou JPG limpo. Todos os metadados são expurgados na RAM.</div>
-            <div class="drop-card" id="drop-cover" tabindex="0" role="button">
-              <div class="drop-icon" aria-hidden="true">▢</div>
-              <div class="drop-body">
-                <div class="drop-placeholder" id="cover-placeholder">Solte a imagem ou clique para escolher</div>
-                <div class="drop-name" id="cover-name" hidden></div>
-                <div class="drop-size" id="cover-size" hidden></div>
-              </div>
+            <div class="drop-wrap">
+              <label class="drop-card" id="drop-cover" for="input-cover">
+                <div class="drop-icon" aria-hidden="true">▢</div>
+                <div class="drop-body">
+                  <div class="drop-placeholder" id="cover-placeholder">Solte a imagem ou clique para escolher</div>
+                  <div class="drop-name" id="cover-name" hidden></div>
+                  <div class="drop-size" id="cover-size" hidden></div>
+                </div>
+              </label>
               <button class="btn-icon-clear" type="button" id="btn-clear-cover" title="Remover" aria-label="Remover">×</button>
-              <input type="file" id="input-cover" accept="image/jpeg,image/png,image/webp" />
+              <input type="file" id="input-cover" class="file-input" accept="image/jpeg,image/png,image/webp" tabindex="-1" />
             </div>
           </div>
         </div>
@@ -212,15 +209,17 @@ export class UiController {
         <div class="field">
           <div class="field-label">Imagem Combinada</div>
           <div class="field-hint">PNG gerado anteriormente.</div>
-          <div class="drop-card" id="drop-stego" tabindex="0" role="button">
-            <div class="drop-icon" aria-hidden="true">▢</div>
-            <div class="drop-body">
-              <div class="drop-placeholder" id="stego-placeholder">Solte a imagem ou clique para escolher</div>
-              <div class="drop-name" id="stego-name" hidden></div>
-              <div class="drop-size" id="stego-size" hidden></div>
-            </div>
+          <div class="drop-wrap">
+            <label class="drop-card" id="drop-stego" for="input-stego">
+              <div class="drop-icon" aria-hidden="true">▢</div>
+              <div class="drop-body">
+                <div class="drop-placeholder" id="stego-placeholder">Solte a imagem ou clique para escolher</div>
+                <div class="drop-name" id="stego-name" hidden></div>
+                <div class="drop-size" id="stego-size" hidden></div>
+              </div>
+            </label>
             <button class="btn-icon-clear" type="button" id="btn-clear-stego" title="Remover" aria-label="Remover">×</button>
-            <input type="file" id="input-stego" accept="image/png,image/jpeg,image/webp" />
+            <input type="file" id="input-stego" class="file-input" accept="image/png,image/jpeg,image/webp" tabindex="-1" />
           </div>
         </div>
 
@@ -261,42 +260,111 @@ export class UiController {
   ): void {
     const card = this.$(cardId);
     const input = this.$(inputId) as HTMLInputElement;
+    const wrap = card.closest('.drop-wrap') ?? card.parentElement;
 
-    const open = (e?: Event) => {
-      e?.preventDefault();
-      e?.stopPropagation();
-      input.click();
+    // Never leave file inputs disabled after capacity / processing errors.
+    input.disabled = false;
+    input.removeAttribute('disabled');
+
+    let opening = false;
+    let dragDepth = 0;
+
+    const clearDragVisual = () => {
+      dragDepth = 0;
+      card.classList.remove('dragover');
     };
+
+    /** Reset value then open native picker — never call preventDefault on this path. */
+    const openPicker = () => {
+      if (opening || input.disabled) return;
+      opening = true;
+      clearDragVisual();
+      try {
+        // Allow re-selecting the same file after a capacity error / parameter change.
+        input.value = '';
+        input.click();
+      } finally {
+        queueMicrotask(() => {
+          opening = false;
+        });
+      }
+    };
+
+    // Label[for] already activates the input natively. We only intercept to reset
+    // value (same-file reselect) — never preventDefault on the activation click.
     card.addEventListener('click', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      if ((e.target as HTMLElement).closest('.btn-icon-clear')) return;
-      open();
+      const t = e.target as HTMLElement;
+      if (t.closest('.btn-icon-clear')) return;
+      // Let the browser handle the file input itself (no preventDefault).
+      if (t === input || t.closest('input[type="file"]')) return;
+      if (opening) return;
+
+      // Reset before the label's default action opens the dialog.
+      input.value = '';
+      clearDragVisual();
+      // Do NOT preventDefault / stopPropagation — label[for] must open the picker.
     });
+
     card.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' || e.key === ' ') {
         e.preventDefault();
         e.stopPropagation();
-        open();
+        openPicker();
       }
     });
+
+    // Keyboard focus on the visible card (label).
+    if (!card.hasAttribute('tabindex')) {
+      card.setAttribute('tabindex', '0');
+    }
 
     const blockNav = (e: DragEvent) => {
       e.preventDefault();
       e.stopPropagation();
     };
-    card.addEventListener('dragenter', blockNav);
+
+    card.addEventListener('dragenter', (e) => {
+      blockNav(e);
+      dragDepth += 1;
+      card.classList.add('dragover');
+    });
     card.addEventListener('dragover', (e) => {
       blockNav(e);
       card.classList.add('dragover');
     });
-    card.addEventListener('dragleave', () => card.classList.remove('dragover'));
+    card.addEventListener('dragleave', (e) => {
+      blockNav(e);
+      dragDepth = Math.max(0, dragDepth - 1);
+      if (dragDepth === 0) card.classList.remove('dragover');
+    });
     card.addEventListener('drop', (e) => {
       blockNav(e);
-      card.classList.remove('dragover');
+      clearDragVisual();
       const files = e.dataTransfer?.files;
-      if (files && files.length > 0) onFiles(files);
+      if (files && files.length > 0) {
+        input.value = '';
+        onFiles(files);
+      }
     });
+    card.addEventListener('dragend', clearDragVisual);
+
+    wrap?.addEventListener('dragleave', (e) => {
+      const related = (e as DragEvent).relatedTarget as Node | null;
+      if (related && wrap.contains(related)) return;
+      clearDragVisual();
+    });
+  }
+
+  /** Keep file pickers interactive after capacity / embed errors. */
+  private ensureFileInputsInteractive(): void {
+    for (const id of ['#input-secret', '#input-cover', '#input-stego'] as const) {
+      const input = this.$(id) as HTMLInputElement;
+      input.disabled = false;
+      input.removeAttribute('disabled');
+    }
+    for (const id of ['#drop-secret', '#drop-cover', '#drop-stego'] as const) {
+      this.$(id).classList.remove('dragover');
+    }
   }
 
   private setDropFileState(
@@ -305,10 +373,12 @@ export class UiController {
     detail: string | null,
   ): void {
     const card = this.$(`#drop-${kind}`);
+    const wrap = card.closest('.drop-wrap') ?? card;
     const placeholder = this.$(`#${kind}-placeholder`);
     const nameEl = this.$(`#${kind}-name`);
     const sizeEl = this.$(`#${kind}-size`);
     if (!name) {
+      wrap.classList.remove('has-file');
       card.classList.remove('has-file');
       placeholder.hidden = false;
       nameEl.hidden = true;
@@ -317,6 +387,7 @@ export class UiController {
       sizeEl.textContent = '';
       return;
     }
+    wrap.classList.add('has-file');
     card.classList.add('has-file');
     placeholder.hidden = true;
     nameEl.hidden = false;
@@ -517,7 +588,6 @@ export class UiController {
     this.$('#panel-hide').classList.toggle('active', tab === 'hide');
     this.$('#panel-extract').classList.toggle('active', tab === 'extract');
     this.revokeAllUrls();
-    this.tickStatusTime();
     this.log('info', `Aba: ${tab === 'hide' ? 'Ocultar' : 'Extrair'}`);
   }
 
@@ -563,15 +633,13 @@ export class UiController {
   }
 
   private updateEmbedEnabled(): void {
-    const ok =
-      !!this.secretBytes &&
-      !!this.coverPixels &&
-      !!this.keyBytes &&
-      !!this.coverInfo;
-    (this.$('#btn-embed') as HTMLButtonElement).disabled = !ok;
+    this.ensureFileInputsInteractive();
+    const filesReady = !!this.secretBytes && !!this.coverPixels && !!this.keyBytes;
+    (this.$('#btn-embed') as HTMLButtonElement).disabled = !filesReady;
   }
 
   private updateExtractEnabled(): void {
+    this.ensureFileInputsInteractive();
     const key = (this.$('#extract-key') as HTMLInputElement).value.trim();
     const ok = !!this.extractPixels && key.length > 0;
     (this.$('#btn-extract') as HTMLButtonElement).disabled = !ok;
@@ -634,7 +702,6 @@ export class UiController {
       this.setDropFileState('secret', name, `${formatBytes(file.size)} · ${mime}`);
 
       this.issueKey();
-      this.tickStatusTime();
       this.log('info', `Secreto: ${name} (${formatBytes(file.size)})`);
       this.log('info', `Payload bruto em RAM: ${this.secretBytes.length} bytes`);
       this.updateEmbedEnabled();
@@ -688,7 +755,6 @@ export class UiController {
           `(${(this.coverInfo.capacityBytes3 / 1_000_000).toFixed(2)} MB) · ` +
           `1-LSB ${formatBytes(this.coverInfo.capacityBytes1)} · 2-LSB ${formatBytes(this.coverInfo.capacityBytes2)}`,
       );
-      this.tickStatusTime();
       this.updateEmbedEnabled();
       this.checkCapacityPreview();
     } catch (err) {
@@ -750,6 +816,8 @@ export class UiController {
             ? ` (−${((1 - compressed.ratio) * 100).toFixed(1)}%)`
             : ' (bruto)'),
       );
+      this.ensureFileInputsInteractive();
+      this.updateEmbedEnabled();
       return;
     }
 
@@ -822,6 +890,8 @@ export class UiController {
       );
       this.setFlash('#embed-flash', 'error', msg);
       this.log('error', msg);
+      this.ensureFileInputsInteractive();
+      this.updateEmbedEnabled();
       return;
     }
 
@@ -836,7 +906,6 @@ export class UiController {
           : ' (bruto)') +
         ` · disfarce ${this.coverInfo.width}×${this.coverInfo.height}`,
     );
-    this.tickStatusTime();
     beginHeavyWork();
 
     // Dedicated copies for Transferable postMessage (keep originals for retry).
@@ -903,7 +972,6 @@ export class UiController {
       this.updateDownloadPngLabel();
 
       this.setProgress('#embed-progress', '#embed-fill', '#embed-status', 100, 'Pronto');
-      this.tickStatusTime();
       this.setFlash('#embed-flash', 'ok', `Pronto: ${outName}. Guarde a chave.`);
       this.log('ok', `Gerado: ${outName}`);
       zeroize(result.imageData);
@@ -955,7 +1023,6 @@ export class UiController {
         'ok',
         `Pixels em RAM: ${purged.width}×${purged.height} · ${px.toLocaleString('pt-BR')} px · slots RGB ${(px * 3).toLocaleString('pt-BR')}`,
       );
-      this.tickStatusTime();
       this.updateExtractEnabled();
     } catch (err) {
       this.extractPixels = null;
@@ -985,7 +1052,6 @@ export class UiController {
     this.setFlash('#extract-flash', null);
     this.setProgress('#extract-progress', '#extract-fill', '#extract-status', 1, 'Processando…');
     this.log('info', 'Extraindo…');
-    this.tickStatusTime();
     beginHeavyWork();
 
     const imageCopy = new Uint8ClampedArray(this.extractPixels);
@@ -1019,7 +1085,6 @@ export class UiController {
       this.$('#extract-result').style.display = 'flex';
 
       this.setProgress('#extract-progress', '#extract-fill', '#extract-status', 100, 'Pronto');
-      this.tickStatusTime();
       this.setFlash('#extract-flash', 'ok', 'Arquivo restaurado.');
       this.log(
         'ok',
