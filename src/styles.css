@@ -243,14 +243,19 @@ body {
   height: 48px;
   border-radius: 50%;
   background: var(--accent-subtle);
-  border: 1px solid var(--border-subtle);
+  border: 1px solid var(--border-active);
   display: flex;
   align-items: center;
   justify-content: center;
   color: var(--text-code);
-  font-size: 1.35rem;
   flex-shrink: 0;
   pointer-events: none;
+}
+
+.drop-svg {
+  width: 22px;
+  height: 22px;
+  display: block;
 }
 
 .drop-body {
@@ -566,24 +571,59 @@ input[type='file'].file-input {
 }
 
 .preview.visible {
-  display: block;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto;
+  width: 100%;
+}
+
+.preview-frame {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  margin: 0 auto;
+  width: 100%;
 }
 
 .preview img {
-  max-width: 100%;
+  max-width: min(100%, 480px);
   max-height: 320px;
+  width: auto;
+  height: auto;
+  margin: 0 auto;
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
   background: var(--bg-input);
   display: block;
+  object-fit: contain;
 }
 
 .result-actions {
-  margin-top: 0.85rem;
+  margin-top: 1rem;
   display: flex;
   flex-wrap: wrap;
   gap: 0.65rem;
   align-items: center;
+  justify-content: center;
+  width: 100%;
+}
+
+#btn-download-png {
+  width: 100%;
+  max-width: 420px;
+}
+
+.field.key-locked .key-input {
+  opacity: 0.85;
+  cursor: default;
+  border-color: var(--border-subtle);
+}
+
+.field.key-locked .tool-btn#btn-regen {
+  opacity: 0.35;
+  cursor: not-allowed;
 }
 
 .flash {

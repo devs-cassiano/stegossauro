@@ -56,12 +56,13 @@ export class UiController {
   private objectUrls: string[] = [];
   private audit: AuditEntry[] = [];
   private lastPngBlob: Blob | null = null;
-  private lastPngName = suggestInnocentPngName();
   private lastSecretBlob: Blob | null = null;
   private lastSecretName = fallbackRestoredName();
   private lastKeyFileName = suggestNeutralKeyName();
   private docAbort: AbortController | null = null;
   private capacityPreviewGen = 0;
+  /** True after a successful embed until inputs are cleared/replaced. */
+  private embedCompleted = false;
 
   constructor(root: HTMLElement) {
     this.root = root;
@@ -96,6 +97,7 @@ export class UiController {
     this.extractHeight = 0;
     this.lastPngBlob = null;
     this.lastSecretBlob = null;
+    this.embedCompleted = false;
     this.audit = [];
     this.worker.terminate();
     this.revokeAllUrls();
@@ -127,11 +129,19 @@ export class UiController {
       <section class="panel active" id="panel-hide" role="tabpanel">
         <div class="upload-grid">
           <div class="field">
-            <div class="field-label">Arquivo Secreto</div>
+            <div class="field-label">Arquivo a ser ocultado</div>
             <div class="field-hint">Qualquer formato (PDF, vídeo, zip, dados brutos).</div>
             <div class="drop-wrap">
               <label class="drop-card" id="drop-secret" for="input-secret">
-                <div class="drop-icon" aria-hidden="true">+</div>
+                <div class="drop-icon" aria-hidden="true">
+                  <svg class="drop-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M7 3.75h6.5L18.5 9v11.25a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4.75a1 1 0 0 1 1-1Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+                    <path d="M13.5 3.75V9h5" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+                    <path d="M9 13.5h6M9 16.5h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+                    <circle cx="16.2" cy="16.2" r="3.1" fill="var(--bg-surface)" stroke="currentColor" stroke-width="1.4"/>
+                    <path d="M16.2 14.85v2.7M14.85 16.2h2.7" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+                  </svg>
+                </div>
                 <div class="drop-body">
                   <div class="drop-placeholder" id="secret-placeholder">Solte o arquivo ou clique para escolher</div>
                   <div class="drop-name" id="secret-name" hidden></div>
@@ -144,11 +154,17 @@ export class UiController {
           </div>
 
           <div class="field">
-            <div class="field-label">Imagem de Disfarce</div>
+            <div class="field-label">Arquivo de disfarce</div>
             <div class="field-hint">PNG ou JPG limpo. Todos os metadados são expurgados na RAM.</div>
             <div class="drop-wrap">
               <label class="drop-card" id="drop-cover" for="input-cover">
-                <div class="drop-icon" aria-hidden="true">▢</div>
+                <div class="drop-icon" aria-hidden="true">
+                  <svg class="drop-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <rect x="3.5" y="5.5" width="17" height="13" rx="1.5" stroke="currentColor" stroke-width="1.5"/>
+                    <path d="M3.5 15.2 8.2 11l3.1 2.6 3.4-4.1 5.8 5.7" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+                    <circle cx="9.2" cy="9" r="1.35" fill="currentColor"/>
+                  </svg>
+                </div>
                 <div class="drop-body">
                   <div class="drop-placeholder" id="cover-placeholder">Solte a imagem ou clique para escolher</div>
                   <div class="drop-name" id="cover-name" hidden></div>
@@ -198,9 +214,11 @@ export class UiController {
         </div>
         <div class="flash" id="embed-flash"></div>
         <div class="preview" id="embed-preview">
-          <img id="embed-preview-img" alt="Pré-visualização" />
+          <div class="preview-frame">
+            <img id="embed-preview-img" alt="Pré-visualização" />
+          </div>
           <div class="result-actions">
-            <button class="btn btn-primary" type="button" id="btn-download-png" disabled>Baixar</button>
+            <button class="btn btn-primary" type="button" id="btn-download-png" disabled>Baixar arquivo gerado</button>
           </div>
         </div>
       </section>
@@ -526,6 +544,7 @@ export class UiController {
     (this.$('#btn-copy') as HTMLButtonElement).disabled = true;
     (this.$('#btn-download-key') as HTMLButtonElement).disabled = true;
     this.setDropFileState('secret', null, null);
+    this.unlockPostEmbed();
     this.clearEmbedResult();
     this.updateEmbedEnabled();
     this.checkCapacityPreview();
@@ -536,6 +555,7 @@ export class UiController {
     this.coverInfo = null;
     (this.$('#input-cover') as HTMLInputElement).value = '';
     this.setDropFileState('cover', null, null);
+    this.unlockPostEmbed();
     this.clearEmbedResult();
     this.updateEmbedEnabled();
     this.checkCapacityPreview();
@@ -556,7 +576,6 @@ export class UiController {
   private refreshOutputNameSuggestion(alternate = false): void {
     const name = alternate ? suggestAlternatePngName() : suggestInnocentPngName();
     (this.$('#output-name') as HTMLInputElement).value = name;
-    this.lastPngName = name;
     this.updateDownloadPngLabel();
   }
 
@@ -564,7 +583,6 @@ export class UiController {
     const input = this.$('#output-name') as HTMLInputElement;
     const normalized = normalizeOutputPngName(input.value);
     input.value = normalized;
-    this.lastPngName = normalized;
     this.updateDownloadPngLabel();
   }
 
@@ -572,13 +590,35 @@ export class UiController {
     const raw = (this.$('#output-name') as HTMLInputElement).value;
     const normalized = normalizeOutputPngName(raw);
     (this.$('#output-name') as HTMLInputElement).value = normalized;
-    this.lastPngName = normalized;
     return normalized;
   }
 
   private updateDownloadPngLabel(): void {
     const btn = this.$('#btn-download-png') as HTMLButtonElement;
-    btn.textContent = `Baixar ${this.lastPngName}`;
+    btn.textContent = 'Baixar arquivo gerado';
+  }
+
+  private lockPostEmbed(): void {
+    this.embedCompleted = true;
+    const keyInput = this.$('#key-display') as HTMLInputElement;
+    keyInput.readOnly = true;
+    keyInput.setAttribute('readonly', 'true');
+    this.$('#key-display').closest('.field')?.classList.add('key-locked');
+    (this.$('#btn-regen') as HTMLButtonElement).disabled = true;
+    (this.$('#btn-copy') as HTMLButtonElement).disabled = false;
+    (this.$('#btn-download-key') as HTMLButtonElement).disabled = false;
+    const embedBtn = this.$('#btn-embed') as HTMLButtonElement;
+    embedBtn.disabled = true;
+    embedBtn.textContent = 'Ocultação concluída';
+  }
+
+  private unlockPostEmbed(): void {
+    this.embedCompleted = false;
+    this.$('#key-display').closest('.field')?.classList.remove('key-locked');
+    const embedBtn = this.$('#btn-embed') as HTMLButtonElement;
+    if (embedBtn.textContent !== 'Ocultar') {
+      embedBtn.textContent = 'Ocultar';
+    }
   }
 
   private switchTab(tab: 'hide' | 'extract'): void {
@@ -634,8 +674,15 @@ export class UiController {
 
   private updateEmbedEnabled(): void {
     this.ensureFileInputsInteractive();
+    const embedBtn = this.$('#btn-embed') as HTMLButtonElement;
+    if (this.embedCompleted) {
+      embedBtn.disabled = true;
+      embedBtn.textContent = 'Ocultação concluída';
+      return;
+    }
     const filesReady = !!this.secretBytes && !!this.coverPixels && !!this.keyBytes;
-    (this.$('#btn-embed') as HTMLButtonElement).disabled = !filesReady;
+    embedBtn.disabled = !filesReady;
+    embedBtn.textContent = 'Ocultar';
   }
 
   private updateExtractEnabled(): void {
@@ -646,6 +693,7 @@ export class UiController {
   }
 
   private issueKey(): void {
+    this.unlockPostEmbed();
     this.keyBytes = generateKeyBytes();
     const formatted = formatKeyHex(this.keyBytes);
     (this.$('#key-display') as HTMLInputElement).value = formatted;
@@ -658,7 +706,7 @@ export class UiController {
   }
 
   private regenerateKey(): void {
-    if (!this.secretFile) return;
+    if (!this.secretFile || this.embedCompleted) return;
     this.issueKey();
     this.log('warn', 'Chave regenerada');
     this.clearEmbedResult();
@@ -691,6 +739,7 @@ export class UiController {
 
     beginHeavyWork();
     try {
+      this.unlockPostEmbed();
       this.clearEmbedResult();
       zeroize(this.secretBytes);
       this.secretBytes = null;
@@ -718,6 +767,7 @@ export class UiController {
 
     beginHeavyWork();
     try {
+      this.unlockPostEmbed();
       this.clearEmbedResult();
       zeroize(this.coverPixels);
       this.coverPixels = null;
@@ -974,6 +1024,7 @@ export class UiController {
       this.setProgress('#embed-progress', '#embed-fill', '#embed-status', 100, 'Pronto');
       this.setFlash('#embed-flash', 'ok', `Pronto: ${outName}. Guarde a chave.`);
       this.log('ok', `Gerado: ${outName}`);
+      this.lockPostEmbed();
       zeroize(result.imageData);
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Falha na injeção';
